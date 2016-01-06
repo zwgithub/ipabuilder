@@ -1,0 +1,278 @@
+#!/bin/bash
+#---------------------------------------
+#功能：打ipa包
+#涉及到命令：
+#xcodebuild -project /Users/user/lcg/svn/TuanChe_build/TuanChe.xcodeproj/ -scheme Test -archivePath build/Tuanche.xcarchive archive CODE_SIGN_IDENTITY="iPhone Distribution:xxx" PROVISIONING_PROFILE="xxx"
+#xcodebuild -exportArchive -archivePath build/Tuanche.xcarchive/ -exportPath Test.ipa -exportOptionsPlist test.plist
+#
+#使用说明：
+#	当前工程目录下，不需要指定目录，已经在工程中配置好证书和bundleId，不需要任何参数：
+#	ipabuilder
+#	指定工程目录，编译project
+#	ipabuilder -p <project directory> [-o <ipa output directory>] [-s <Code Signing Identity>] [-f <Provisioning Profile>] [-m <export method>] [-c <schemename>] [-b <bunlde identifier>]
+#	指定工程目录，编译workspace
+#	ipabuilder -w <workspace directory> [-o <ipa output directory>] [-s <Code Signing Identity>] [-f <Provisioning Profile>] [-m <export method>] [-c <schemename>] [-b <bunlde identifier>]
+
+#
+#可选参数：  
+#	-p PATH		project directory，默认当前目录
+#	-w PATH		workspace directory，默认当前目录
+#	-o PATH		输出ipa的文件目录，默认当前目录
+#	-s NAME		签名证书，不给值默认使用工程中的配置
+#	-f NAME		描述文件名的UDID，不给值默认使用工程中的配置
+#   -c NAME     指定scheme名称，默认使用工程项目名作为scheme
+#   -m NAME     指定method，现在只有app-store、enterprise、ad-hoc、development、空五种，默认为空
+#   -b NAME     指定工程的bundleId
+# 
+#---------------------------------------
+
+function usage() {
+	echo "
+使用说明：
+	当前工程目录下，不需要指定目录，已经在工程中配置好证书和bundleId，不需要任何参数：
+	ipabuilder
+	指定工程目录，编译project
+	ipabuilder -p <project directory> [-o <ipa output directory>] [-s <Code Signing Identity>] [-f <Provisioning Profile>] [-m <export method>] [-c <schemename>] [-b <bunlde identifier>]
+	指定工程目录，编译workspace
+	ipabuilder -w <workspace directory> [-o <ipa output directory>] [-s <Code Signing Identity>] [-f <Provisioning Profile>] [-m <export method>] [-c <schemename>] [-b <bunlde identifier>]
+
+可选参数：  
+	-p PATH		project directory，默认当前目录
+	-w PATH		workspace directory，默认当前目录
+	-o PATH		输出ipa的文件目录，默认当前目录
+	-s NAME		签名证书，不给值默认使用工程中的配置
+	-f NAME		描述文件名的UDID，不给值默认使用工程中的配置
+   	-c NAME     指定scheme名称，默认使用工程项目名作为scheme
+   	-m NAME     指定method，现在只有app-store、enterprise、ad-hoc、development、空五种，默认为空
+   	-b NAME     指定工程的bundleId
+"
+}
+
+#查找是否存在一个以第一个参数结尾的文件
+function findFileForGiveSuffix() {
+	if [ $1 == "" ];then       #$1代表第一个参数 $n代表第n个参数
+		echo "plese input suffix"
+		return -1
+	fi
+	matchSuffix="*.$1"
+	ls $project_path/$matchSuffix &>/dev/null	# &>的意思是把标准输入和表转错误输出都重新定向到文件里
+	returnValue=$?
+	if [ $returnValue = 0 ];then # 执行命令后都有返回值，0表示成功  可以用$?来显示执行的结果
+		project_name=$(echo $(basename $project_path/$matchSuffix))
+		return 0
+	else
+		return -1
+	fi
+}
+
+##########初始化默认值##########
+current_path=$(pwd)	 #$(pwd)是执行pwd这条指令,
+output_path=${current_path}
+project_path=${current_path}
+buildMethod=""
+#归档类型，默认为0，自己查找；1为project；2为workspace
+archiveType=0
+
+#后面带冒号，说明需要带参数
+param_pattern="p:w:o:s:f:c:m:b:"
+OPTIND=1
+while getopts $param_pattern optname
+	do
+		#保存临时变量
+		tmp_optind=$OPTIND
+		tmp_optname=$optname
+		tmp_optarg=$OPTARG
+
+		#对参数进行检查
+		OPTIND=$OPTIND-1
+		if getopts $param_pattern optname ;then
+			echo $param_pattern
+			echo  "Error: argument value for option $tmp_optname"
+			usage
+			exit 2
+		fi
+
+		#恢复变量
+		OPTIND=$tmp_optind
+		optname=$tmp_optname
+
+		case "$optname" in
+			"p")
+				if [ ! -d $tmp_optarg ];then
+					echo "Error: The value of option p must be an exist directory."
+					exit 2
+				fi
+				project_path=$tmp_optarg
+				archiveType=1
+		        ;;
+		    "w")
+				if [ ! -d $tmp_optarg ];then
+					echo "Error: The value of option w must be an exist directory."
+					usage
+					exit 2
+				fi
+				project_path=$tmp_optarg
+				archiveType=2
+				;;
+		    "o")
+				if [ ! -d $tmp_optarg ];then
+					echo "Error: The value of option o must be an exist directory."
+					usage
+					exit 2
+				fi
+
+				#获取目录，去掉目录后面的/
+				cd $tmp_optarg
+				output_path=$(pwd)
+				cd $current_path
+				;;
+		    "s")
+				build_sign=$tmp_optarg				
+		        ;;
+		    "f")
+				build_profile=$tmp_optarg
+		        ;;
+		    "c")
+				buildSchemeName=$tmp_optarg
+				;;
+			"m")
+				#如果method不是app-store、enterprise、ad-hoc、development任何一种，则报错退出
+				if [ "$tmp_optarg" != "app-store" -a "$tmp_optarg" != "enterprise" -a "$tmp_optarg" != "ad-hoc" -a "$tmp_optarg" != "development" -a "$tmp_optarg" != "" ];then
+					echo "Error: Unknown option $tmp_optarg for -$optname"
+					usage
+					exit 2
+				fi
+				buildMethod=$tmp_optarg
+				;;
+			"b")
+				buildBundleId=$tmp_optarg
+				;;
+	        "?")
+		        echo "Error: Unknown option $OPTARG"
+		        usage
+				exit 2
+		        ;;
+		    ":")
+		        echo "Error: No argument value for option $OPTARG"
+		        usage
+				exit 2
+		        ;;
+		    *)
+		      # Should not occur
+		        echo "Error: Unknown error while processing options"
+		        usage
+				exit 2
+		        ;;
+		esac
+	done
+
+#进入工程目录，并且去掉多余的/
+cd ${project_path}
+project_path=$(pwd)
+
+####这一段代码逻辑是查找workspace或者xcodeproj
+#归档类型，默认为0，自己查找；1为project；2为workspace
+if [ $archiveType == 2 ];then
+	findFileForGiveSuffix "xcworkspace"
+	commandPart=" -workspace $project_name"
+	findReturnValue=$?    # $?表示运行的命令的结束代码（返回值）
+elif [ $archiveType == 1 ];then
+	findFileForGiveSuffix "xcodeproj"
+	findReturnValue=$?
+else
+	#这里先查找xcworkspace文件，然后再查找xcodeproj
+	findFileForGiveSuffix "xcworkspace"
+	findReturnValue=$?
+	if [ $findReturnValue == 0 ];then
+		commandPart=" -workspace $project_name"
+	else
+		findFileForGiveSuffix "xcodeproj"
+		findReturnValue=$?
+	fi
+fi
+
+if [ $findReturnValue != 0 ];then
+	#没有找到，则报错
+	echo "Error: cant't find xcodeproj or xcworkspace file"
+	exit 2
+else
+	appName=$(echo "${project_name%.*}")
+	#如果没有设置-c参数，则自动以工程名为scheme名称
+	if [ "$buildSchemeName" = "" ];then
+		buildSchemeName="$appName"
+	fi
+fi
+
+#设置了bundleId则，修改bundldId
+if [ "$buildBundleId" != "" ];then
+	echo "set Info.plist bunldId to $buildBundleId"
+	appInfoPlistPath=$project_path/$appName/Info.plist
+	/usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier $buildBundleId" $appInfoPlistPath
+	#如果存在Test，则也更改Test
+	if [ -d "$project_path/${appName}Tests" ]; then
+		appTestInfoPlistPath="$project_path/${appName}Tests/Info.plist"
+		/usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier $buildBundleId" $appTestInfoPlistPath
+	fi
+	#如果存在UITest，则修改UITest
+	if [ -d "$project_path/${appName}UITests" ]; then
+		appUITestInfoPlistPath="$project_path/${appName}UITests/Info.plist"
+		/usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier $buildBundleId" $appUITestInfoPlistPath
+	fi
+fi
+
+#create build path
+build_path="${project_path}/build"
+if [ ! -d ${build_path} ];then
+	mkdir ${build_path}
+fi
+
+#archive路径
+archive_path="${build_path}/${buildSchemeName}.xcarchive"
+
+#make up build command
+build_cmd='xcodebuild archive '$commandPart
+
+cd $project_path
+build_cmd=${build_cmd}' -scheme '${buildSchemeName}' -archivePath '${archive_path}
+if [ "$build_sign" != "" ];then
+	build_cmd="${build_cmd} CODE_SIGN_IDENTITY=\"$build_sign\""
+fi
+if [ "$build_profile" != "" ];then
+	build_cmd=${build_cmd}' PROVISIONING_PROFILE="'${build_profile}'"'
+fi
+if [ "$buildBundleId" != "" ];then
+	build_cmd=${build_cmd}' PRODUCT_BUNDLE_IDENTIFIER="'${buildBundleId}'"'
+fi
+
+echo $build_cmd
+
+#开始打包，生成xcarchive文件
+eval ${build_cmd} || exit -1
+
+##################生成exportOptionsPlist文件###################
+exportOptionsPlist="exportOptionsPlist.plist"
+buildFormat="IPA"
+#删除文件
+if [ -f $exportOptionsPlist ];then
+	rm $exportOptionsPlist
+fi
+#生成plist文件
+/usr/libexec/PlistBuddy -c save $exportOptionsPlist
+#设置method
+if [ "$buildMethod" != "" ];then
+	/usr/libexec/PlistBuddy -c "Add :method string \"$buildMethod\"" $exportOptionsPlist
+fi
+
+#设置导出格式
+if [ "$buildFormat" != "" ];then
+	/usr/libexec/PlistBuddy -c "Add :exportFormat string \"$buildFormat\"" $exportOptionsPlist
+fi
+
+#如果设置了签名证书，则添加
+if [ "$build_sign" != "" ];then
+	/usr/libexec/PlistBuddy -c "Add :exportSigningIdentity string \"$build_sign\"" $exportOptionsPlist
+	/usr/libexec/PlistBuddy -c "Add :exportInstallerIdentity string \"$build_sign\"" $exportOptionsPlist
+fi
+
+#导出ipa包
+xcodebuild -exportArchive -archivePath ${archive_path} -exportPath $output_path -exportOptionsPlist $exportOptionsPlist
